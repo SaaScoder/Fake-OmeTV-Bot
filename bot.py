@@ -3,7 +3,6 @@ from dotenv import load_dotenv
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, ChatInviteLink, Update
 from telegram.ext import Application, ChatMemberHandler, ContextTypes
 from fastapi import FastAPI
-import uvicorn
 import asyncio
 
 # === Load .env ===
@@ -17,7 +16,7 @@ PORT = int(os.getenv("PORT", 10000))  # Render injecteert automatisch $PORT
 user_progress = {}
 user_invite_links = {}
 
-# === Telegram helper ===
+# === Telegram helpers ===
 async def send_progress_message(context: ContextTypes.DEFAULT_TYPE, user_id: int):
     progress = user_progress.get(user_id, 0)
     if progress < 2:
@@ -29,7 +28,6 @@ async def send_progress_message(context: ContextTypes.DEFAULT_TYPE, user_id: int
         text = "✅ Je hebt 2 vrienden toegevoegd! Klik hieronder voor toegang."
     await context.bot.send_message(chat_id=user_id, text=text, reply_markup=InlineKeyboardMarkup(keyboard))
 
-# === Handlers ===
 async def welcome_new_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
     member = update.chat_member
     if member.new_chat_member.status == "member":
@@ -54,28 +52,23 @@ async def track_new_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
             print(f"✅ User {inviter_id} heeft iemand uitgenodigd. Teller: {user_progress[inviter_id]}")
             await send_progress_message(context, inviter_id)
 
-# === Dummy FastAPI server ===
+# === FastAPI server ===
 app = FastAPI()
+
 @app.get("/")
-def read_root():
+def root():
     return {"status": "Bot running"}
 
-# === Main runner ===
-async def main_runner():
-    telegram_app = Application.builder().token(TOKEN).build()
-    telegram_app.add_handler(ChatMemberHandler(welcome_new_member, ChatMemberHandler.CHAT_MEMBER))
-    telegram_app.add_handler(ChatMemberHandler(track_new_member, ChatMemberHandler.CHAT_MEMBER))
-
-    # start bot en webserver parallel
-    bot_task = asyncio.create_task(telegram_app.run_polling(allowed_updates=Update.ALL_TYPES))
-    config = uvicorn.Config(app, host="0.0.0.0", port=PORT, log_level="info")
-    server = uvicorn.Server(config)
-    server_task = asyncio.create_task(server.serve())
-
-    await asyncio.gather(bot_task, server_task)
+# === Start Telegram bot op FastAPI startup event ===
+@app.on_event("startup")
+async def start_bot():
+    app.bot_app = Application.builder().token(TOKEN).build()
+    app.bot_app.add_handler(ChatMemberHandler(welcome_new_member, ChatMemberHandler.CHAT_MEMBER))
+    app.bot_app.add_handler(ChatMemberHandler(track_new_member, ChatMemberHandler.CHAT_MEMBER))
+    asyncio.create_task(app.bot_app.run_polling(allowed_updates=Update.ALL_TYPES))
+    print("🚀 Telegram bot gestart in achtergrond")
 
 # === Entry point ===
 if __name__ == "__main__":
-    loop = asyncio.get_event_loop()
-    loop.create_task(main_runner())
-    loop.run_forever()
+    import uvicorn
+    uvicorn.run("bot:app", host="0.0.0.0", port=PORT, log_level="info")
